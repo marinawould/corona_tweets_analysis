@@ -1,0 +1,283 @@
+---
+title: "Coronavirus tweets sentiment analysis in R"
+output: html_document
+author: Marina Romanova, OJNTSV
+---
+
+# Task 
+
+Prepare a text mining model in R for one of the following tasks. Perform the preprocessing steps including at least tokenization, stop word elimination, word and bi-grams investigation (frequencies), word/bi-gram cloud. Use the results for topic mapping and/or sentiment analysis. Explain the results. 
+
+
+## Data Preprocessing
+
+```{r, warning=FALSE, message=FALSE, echo = FALSE, error = FALSE}
+#Loading all the required R libraries
+library(ROAuth)
+library(hms)
+library(lubridate) 
+library(tidytext)
+library(tm)
+library(wordcloud)
+library(plyr)
+library(stringr)
+library(ggplot2)
+library(plotly)
+library(hms)
+library(lubridate) 
+library(magrittr)
+library(tidyverse)
+library(widyr)
+library(readr)
+library(rjson)
+library(tidyverse)
+library(stopwords)
+library(tidytext)
+library(LDAvis)
+library(servr)
+library(quanteda)
+library(factoextra)
+library(caret)
+library(stringr)
+library(ggpubr)
+library(syuzhet)
+library(tidytext)
+library(textdata)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(psych)
+```
+
+#### Displaying data
+
+I chose to analyse data scrapped from Twitter. The tweets further analysed have one thematic: Covid-19. There are the following columns in the dataset: 
+
+```{r, warning=FALSE, error = FALSE}
+#Loading dataset
+tweets_data <- read_delim("Corona_virus_tweets.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+#displaying dataset
+head(tweets_data)
+```
+There are 5 columns and 41 157 rows in the original data. For further analysis only those columns will be taken into account: 
+
+- TweetAt
+- OriginalTweet
+
+
+```{r, warning=FALSE, error = FALSE}
+#subsetting data
+tweets_data <- select(tweets_data, TweetAt, OriginalTweet)
+```
+
+#### Which time period do we have for analysis?
+
+```{r, warning=FALSE, error = FALSE}
+#formatting date column to be date
+tweets_data$TweetAt <- as.Date(tweets_data$TweetAt,format='%d-%m-%Y')
+a <- table(tweets_data$TweetAt)
+a
+```
+
+```{r, warning=FALSE, error = FALSE}
+print(paste("Earliest tweet:", min(tweets_data$TweetAt)))
+print(paste("Latest tweet:", max(tweets_data$TweetAt)))
+```
+
+As it can be seen, there are tweets from the first month of pandemic in the dataset. 
+
+#### Tokenization and text cleaning
+
+For further analysis we need to tokenize and clean data
+Firstly, let's analyse data by unigram - so the unit for analysis will be one word.
+
+We also need to clean the data. I excluded stopwords, digits, punctuation and 4 specific text combination that did not matter, but were often found in the text. 
+
+```{r, warning=FALSE, error = FALSE}
+#making data to be in lower case
+tweets_data$clean_lem = str_to_lower(tweets_data$OriginalTweet)
+#tokenizing and cleaning text
+tweets_token = tweets_data %>% 
+  unnest_tokens(word, clean_lem) %>% 
+  filter(!(word %in% stopwords("en"))) %>% 
+  filter(!(str_detect(word, "[[:digit:]]"))) %>% 
+  filter(!(str_detect(word, "[[:punct:]]"))) %>%
+  filter(!(str_detect(word, "rt"))) %>%
+  filter(!(str_detect(word, "@\\w+"))) %>%
+  filter(!(str_detect(word, "https"))) %>%
+  filter(!(str_detect(word, "amp")))
+#displaying data
+head(tweets_token)
+```
+
+
+
+###  Word frequency
+
+#### What are the most common words (unigrams) used in Tweets?
+
+```{r, warning=FALSE, error = FALSE}
+tweets_token %>% count(word, sort = TRUE) %>% 
+  slice(1:10) %>% 
+  ggplot() + geom_bar(aes(word, n), stat = "identity", fill = "#c46960") +
+  theme_minimal() +
+  labs(title = "The most frequent words used in tweets about Covid-19") +
+  coord_flip()
+```
+
+Before taking sentiment into account, let's take a look at the top-10 most frequent words in tweets. As it can be seen, the most frequently used word was, expectedly, coronavirus itself. It was used more then 15 000 times. Its synonym - covid - is at the second place. Another topic in the most frequent words is food. No wonder it is like that as it was a panic in the first month of the pandemic that the fod supply can be over. 
+
+
+#### Wordcloud
+
+Here are 100 most frequent words from tweets displayed as wordcloud. 
+
+```{r, warning=FALSE, error = FALSE}
+set.seed(1234) # for reproducibility 
+tweets_token %>%
+  anti_join(stop_words) %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+```
+
+### Bigram
+
+Now let's take a look at bigrams. The data cleaning steps for tokenisation are the same as for unigrams. 
+
+```{r, warning=FALSE, error = FALSE}
+#cleaning and tokening data
+bigram_df <- tweets_data %>%
+         mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "[[:punct:]]",
+                                       " ")) %>%
+         mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "[[:digit:]]",
+                                       "")) %>%
+        mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "https",
+                                       "")) %>%
+        mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "rt",
+                                       "")) %>%
+        mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "@\\w+",
+                                       "")) %>%
+        mutate(OriginalTweet = str_replace_all(string = OriginalTweet ,
+                                       pattern = "amp",
+                                       "")) %>%
+        unnest_tokens(output = bigram,
+                      input = OriginalTweet ,
+                      token = "ngrams",
+                      n = 2)
+#creating bigrams
+biwords_df <- bigram_df %>% 
+        separate(bigram, c("word1","word2"), sep= " ") %>%
+        filter(!word1 %in% stop_words$word & !word2 %in% stop_words$word) %>% 
+        mutate(word2 = str_replace_all(string = word2 , pattern = "s$", "")) %>%
+        unite(bigram, word1, word2 , sep = " ")
+
+head(biwords_df)
+
+```
+
+#### What are the most common bigrams used?
+
+```{r, warning=FALSE, error = FALSE}
+biwords_df %>% count(bigram, sort = TRUE) %>% 
+  slice(1:10) %>% 
+  ggplot() + geom_bar(aes(bigram, n), stat = "identity", fill = "#7B241C") +
+  theme_minimal() +
+  labs(title = "Top bigrams of tweets about Covid-19 Outbreak") +
+  coord_flip()
+```
+
+Most frequent bigrams have the same topics as the unigrams: coronavirus and grocery panic. 
+
+
+## Sentiment analysis
+
+For sentiment analysis I will use NRC sentiment vocabulary. The NRC Emotion Lexicon is a list of English words and their associations with eight basic emotions (anger, fear, anticipation, trust, surprise, sadness, joy, and disgust) and two sentiments (negative and positive). For further analysis, only sentiment will be taken into account. 
+
+But before analysing sentiment, let's take a look at most used positive and negative words
+
+#### Most frequent used positive words
+
+```{r, warning=FALSE, error = FALSE}
+#counting positive sentiment
+nrc_positive <- get_sentiments("nrc") %>% 
+  filter(sentiment == "positive")
+#visualizing
+tweets_token %>%
+  inner_join(nrc_positive) %>%
+  dplyr::count(word, sort = TRUE) %>%
+  slice(1:10) %>% 
+  ggplot() + geom_bar(aes(word, n), stat = "identity", fill = "#006d77") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Top-10 positive words of tweets about Covid-19 Outbreak")
+```
+
+#### Most frequent used negative words
+
+```{r, warning=FALSE, error = FALSE}
+#counting negative sentiment
+nrc_negative <- get_sentiments("nrc") %>% 
+  filter(sentiment == "negative")
+#visualizing sentiment
+tweets_token %>%
+  inner_join(nrc_negative) %>%
+  dplyr::count(word, sort = TRUE) %>%
+  slice(1:10) %>% 
+  ggplot() + geom_bar(aes(word, n), stat = "identity", fill = "#e63946") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Top negative words of tweets about Covid-19 Outbreak")
+```
+
+There is a huge difference in topics stated between negative and positive words! The positive words are mostly about food (which is still not the most positive thing to talk about, especially for a whole month). However, the negative words are rather very upsetting: panic, crisis, emergency, panic - those are very negative words.
+
+### Calculating sentiment for each day 
+
+I am going to use very simple method of calculation the sentiment. I will count overall of positive and negative words for each date, and the sentiment here is the amount difference between the two. 
+
+```{r, warning=FALSE, error = FALSE}
+# grouping words by date 
+tidy_tweets <- tweets_token %>%
+    group_by(TweetAt) 
+# counting sentiment
+sentiment_bydate <- tidy_tweets %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(TweetAt, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+head(sentiment_bydate)
+```
+#### How the sentiment changed over time?
+
+
+```{r, warning=FALSE, error = FALSE}
+d <- ggplot(sentiment_bydate, aes(TweetAt, sentiment)) +
+  geom_line(show.legend = TRUE, color = "#1d3557", linewidth = 1.5) +
+  theme_minimal() +
+  labs(title = "Sentiment score change of tweets about Covid-19 (16.03.2020 - 14.04.2020)") 
+
+d + geom_hline(yintercept=0, color = "#6d6875", size=0.8)
+```
+
+The result is upsetting but expected: almost in every single day of the first moth of Covid-19 outbreak the overall sentiment was negative, with the biggest fall in the first week of the pandemic. There were only 5 days where sentiment was overall positive, but the score was almost 0, so it was rather neutral. 
+
+
+## Conclusion
+
+By word and sentiment analysis of tweets for the first moth of covid-19 pandemic, it can be concluded that the topics were most;y discussed were coronovarius itself and assumptions about the food crisis. The overall sentiment score was negative in almost every day of the first month, having the biggest fall int the week 1 of the pandemic. 
+
+
+## References
+
+- https://www.tidytextmining.com/sentiment.html
+- https://www.r-bloggers.com/2021/05/sentiment-analysis-in-r-3/ 
+- https://rpubs.com/Shaahin/anxiety-bigram
+
+
